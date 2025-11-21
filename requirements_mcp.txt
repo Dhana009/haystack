@@ -1,0 +1,12 @@
+# MCP Server dependencies
+mcp>=0.9.0
+
+# Haystack core (if not already installed from source)
+# haystack-ai
+
+# Qdrant integration for Haystack
+qdrant-haystack>=1.0.0
+
+# Sentence transformers for embeddings
+sentence-transformers>=5.0.0
+

@@ -175,3 +175,7 @@ haystack/json-schemas
 
 # uv
 uv.lock
+
+# MCP server sensitive configs
+**/mcp.json
+**/.cursor/mcp.json

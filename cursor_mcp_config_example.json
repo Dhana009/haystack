@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "haystack-rag": {
+      "command": "python",
+      "args": [
+        "/path/to/mcp_haystack_server.py"
+      ],
+      "env": {
+        "QDRANT_URL": "https://your-cluster.qdrant.io:6333",
+        "QDRANT_API_KEY": "your-api-key-here",
+        "QDRANT_COLLECTION": "haystack_mcp"
+      }
+    }
+  }
+}
+

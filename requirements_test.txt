@@ -1,0 +1,9 @@
+# Core Haystack (if not already installed from source)
+# haystack-ai
+
+# Qdrant integration for Haystack
+qdrant-haystack
+
+# Sentence transformers for embeddings
+sentence-transformers>=5.0.0
+
