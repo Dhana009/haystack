@@ -36,10 +36,10 @@ async def test_tools():
     for tool in tools:
         print(f"  - {tool.name}: {tool.description[:60]}...")
     
-    # Test index_document
-    print("\n3. Testing index_document...")
+    # Test add_document
+    print("\n3. Testing add_document...")
     result = await server.call_tool(
-        "index_document",
+        "add_document",
         {
             "content": "This is a test document for the MCP server.",
             "metadata": {"source": "test", "type": "example"}
@@ -51,10 +51,10 @@ async def test_tools():
         test_doc_id = response["document_id"]
         print(f"  Document ID: {test_doc_id}")
     
-    # Test search
-    print("\n4. Testing search...")
+    # Test search_documents
+    print("\n4. Testing search_documents...")
     result = await server.call_tool(
-        "search",
+        "search_documents",
         {"query": "test document", "top_k": 3}
     )
     response = json.loads(result[0].text)
