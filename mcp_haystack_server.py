@@ -164,8 +164,8 @@ async def list_tools() -> list[Tool]:
     """List available MCP tools."""
     return [
         Tool(
-            name="index_document",
-            description="Index a document into the Haystack RAG system. The document will be embedded and stored in Qdrant.",
+            name="add_document",
+            description="Add a document to the Haystack RAG system. The document will be embedded and stored in Qdrant. Use for storing new documents or content for future search.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -183,8 +183,8 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="index_file",
-            description="Index a file by reading its content and storing it in the RAG system.",
+            name="add_file",
+            description="Add a file to the Haystack RAG system by reading its content. Use for storing new files for future search.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -202,8 +202,8 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="index_code",
-            description="Index a code file with language detection and code-specific metadata. Automatically detects programming language from file extension.",
+            name="add_code",
+            description="Add a code file to the Haystack RAG system with language detection and code-specific metadata. Automatically detects programming language from file extension. Use for storing code files for future search.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -225,8 +225,8 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="index_code_directory",
-            description="Index all code files from a directory recursively. Supports common code file extensions (.py, .js, .ts, .java, .cpp, .go, .rs, etc.).",
+            name="add_code_directory",
+            description="Add all code files from a directory recursively to the Haystack RAG system. Supports common code file extensions (.py, .js, .ts, .java, .cpp, .go, .rs, etc.). Use for storing multiple code files for future search.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -254,8 +254,8 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="search",
-            description="Search for documents in the RAG system using semantic search. Can search documentation, code, or both.",
+            name="search_documents",
+            description="Search for documents and code using semantic similarity. Use for finding relevant documents, code snippets, or content based on meaning. Can search documentation, code, or both.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -282,7 +282,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_stats",
-            description="Get statistics about the indexed documents in the RAG system.",
+            description="Get statistics about indexed documents. Use for checking how many documents are stored, collection info, etc.",
             inputSchema={
                 "type": "object",
                 "properties": {}
@@ -290,7 +290,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="delete_document",
-            description="Delete a document from the RAG system by its ID.",
+            description="Delete a document from the vector store by ID. Use when user wants to remove a specific document.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -311,7 +311,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
     global document_store, code_document_store, doc_embedder, code_embedder, search_pipeline, code_search_pipeline
     
     # Check initialization based on tool type
-    if name in ["index_document", "index_file", "search", "get_stats", "delete_document"]:
+    if name in ["add_document", "add_file", "search_documents", "get_stats", "delete_document"]:
         if document_store is None or doc_embedder is None or search_pipeline is None:
             return [TextContent(
                 type="text",
@@ -319,7 +319,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     "error": "Haystack not initialized. Please check QDRANT_URL and QDRANT_API_KEY environment variables."
                 }, indent=2)
             )]
-    elif name in ["index_code", "index_code_directory"]:
+    elif name in ["add_code", "add_code_directory"]:
         if code_document_store is None or code_embedder is None:
             return [TextContent(
                 type="text",
@@ -329,7 +329,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
             )]
     
     try:
-        if name == "index_document":
+        if name == "add_document":
             content = arguments.get("content", "")
             metadata = arguments.get("metadata", {})
             
@@ -357,7 +357,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 }, indent=2)
             )]
         
-        elif name == "index_file":
+        elif name == "add_file":
             file_path = arguments.get("file_path", "")
             metadata = arguments.get("metadata", {})
             
@@ -403,7 +403,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 }, indent=2)
             )]
         
-        elif name == "index_code":
+        elif name == "add_code":
             file_path = arguments.get("file_path", "")
             language = arguments.get("language", "")
             metadata = arguments.get("metadata", {})
@@ -506,7 +506,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 }, indent=2)
             )]
         
-        elif name == "index_code_directory":
+        elif name == "add_code_directory":
             directory_path = arguments.get("directory_path", "")
             extensions = arguments.get("extensions", [])
             exclude_patterns = arguments.get("exclude_patterns", ["__pycache__", "node_modules", ".git", ".venv", "venv", "env", ".env", "dist", "build", ".pytest_cache", ".mypy_cache"])
@@ -620,7 +620,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 }, indent=2)
             )]
         
-        elif name == "search":
+        elif name == "search_documents":
             query = arguments.get("query", "")
             top_k = arguments.get("top_k", 5)
             content_type = arguments.get("content_type", "all")  # "all", "code", "docs"
