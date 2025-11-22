@@ -1,0 +1,34 @@
+---
+alwaysApply: true
+---
+RULE 5 – STORAGE PIPELINE CONTRACT
+
+Every write to Qdrant MUST follow this pipeline:
+
+Normalize content
+
+strip trailing spaces
+
+normalize newlines
+
+optionally lower-case for hash
+
+remove obvious placeholders ("TODO", "..." etc.) if they’re not meaningful.
+
+Compute hash_content.
+
+Build metadata conforming to RULE 3.
+
+Run metadata-based query to check existing entries for doc_id / category.
+
+Decide:
+
+skip, create new version, or new doc (RULE 4).
+
+Embed content using the configured embedding model.
+
+Write to Qdrant via Haystack’s write_documents.
+
+Verify write using RULE 7 (verification).
+
+If any step fails → do NOT silently continue. Error must be surfaced.

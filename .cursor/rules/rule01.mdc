@@ -1,0 +1,25 @@
+---
+alwaysApply: true
+---
+## RULE 1 – QDRANT’S ROLE
+
+**Qdrant is the semantic document store for this repo.**
+
+It MUST be used only for:
+
+- Long-form or medium-form text:
+  - rules, standards, guidelines  
+  - design docs, PRDs, specs  
+  - architecture notes  
+  - debugging summaries  
+  - test strategies  
+  - code explanation snippets  
+- Versioned content that may evolve over time.
+
+It MUST NOT be used for:
+
+- Tiny atomic facts that are better represented as graph edges.  
+- Per-token “chat logs” or ultra-fragmented memory.  
+- Raw high-volume logs (they must be summarized first).
+
+Qdrant = **“documents we want to retrieve semantically”**, nothing else.

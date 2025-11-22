@@ -1,0 +1,34 @@
+---
+alwaysApply: true
+---
+RULE 6 – QUERY & RETRIEVAL CONTRACT
+
+All Haystack queries against Qdrant MUST:
+
+Use metadata filters first, then embeddings:
+
+Filter by category when known.
+
+Filter by status = "active" for most interactions.
+
+Filter by repo = "qdrant_haystack" to avoid cross-repo contamination.
+
+Use a sensible top_k:
+
+default: top_k = 5
+
+max: top_k = 20 unless user explicitly increases.
+
+Prefer hybrid retrieval when possible:
+
+dense (embedding) + sparse (BM25 or similar).
+
+Always return doc_id + version so the assistant knows what it is reading.
+
+Avoid using Qdrant for:
+
+fuzzy "chat memory" retrieval
+
+raw logs
+
+purely ephemeral one-off content.

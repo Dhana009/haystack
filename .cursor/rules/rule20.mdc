@@ -1,0 +1,24 @@
+---
+alwaysApply: true
+---
+RULE 10 – TESTING & CI REQUIREMENTS
+
+CI for this repo MUST include:
+
+Unit tests for:
+
+dedup logic
+
+metadata enforcement
+
+versioning logic
+
+Integration tests for:
+
+storing and retrieving documents
+
+verifying that new versions deprecate old ones
+
+verifying placeholder protection.
+
+No production usage of this Qdrant integration is allowed unless tests pass.

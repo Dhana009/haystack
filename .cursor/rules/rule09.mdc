@@ -1,0 +1,26 @@
+---
+alwaysApply: true
+---
+RULE 9 – COLLECTION STRUCTURE & INDEXING
+
+The Qdrant collection used by this project MUST:
+
+have a fixed, agreed dimensionality for embeddings (matching the model)
+
+have payload indexing configured for:
+
+doc_id
+
+category
+
+status
+
+repo
+
+version
+
+Any change to the embedding model or dimension requires:
+
+either a new collection
+
+or a full controlled reindex.

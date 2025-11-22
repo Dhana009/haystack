@@ -1,0 +1,24 @@
+---
+alwaysApply: true
+---
+RULE 7 – VERIFICATION & PLACEHOLDER PROTECTION
+
+After writing, the assistant MUST:
+
+Read back the stored document(s) by doc_id + version.
+
+Compare the retrieved text with the intended content:
+
+if content differs significantly → treat as failure.
+
+Run placeholder detection:
+
+if the document contains placeholder markers (e.g., "WRITE HERE", "TBD", "TODO"), and the original was non-placeholder, treat as corruption.
+
+If verification fails:
+
+mark the write as FAILED (no silent success)
+
+log a diagnostic explanation
+
+do NOT trust that document for RAG usage.

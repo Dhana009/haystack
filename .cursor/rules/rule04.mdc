@@ -1,0 +1,32 @@
+---
+alwaysApply: true
+---
+RULE 4 – MULTI-FACTOR DEDUPLICATION & VERSIONING
+
+Before inserting any new document into Qdrant, the assistant MUST:
+
+Compute a content hash (hash_content) over normalized text.
+
+Search Qdrant by metadata first, not by embedding:
+
+Filter by doc_id and category.
+
+Based on results:
+
+If hash_content matches an existing stored document
+→ treat as exact duplicate, skip insert.
+
+If doc_id matches but hash_content differs
+→ treat as a new version:
+
+set status = "deprecated" on old version
+
+insert new version with status = "active"
+
+update updated_at.
+
+If no matching doc_id found
+→ treat as new document, insert normally.
+
+Embedding similarity must NEVER be the only deduplication method.
+It may be used as a hint, but metadata + hash decides.

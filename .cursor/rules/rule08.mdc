@@ -1,0 +1,22 @@
+---
+alwaysApply: true
+---
+RULE 8 – BULK OPERATIONS
+
+For large operations (e.g., populating all rules/commands):
+
+Use batched write_documents with batch size limits (e.g., 64–256 docs per batch).
+
+Before bulk insert:
+
+optionally back up Qdrant or dump all metadata.
+
+After bulk insert:
+
+run a summary verification:
+
+count of docs by category and status
+
+sample hash checks.
+
+Bulk operations must never silently ignore errors; partial failures must be reported.

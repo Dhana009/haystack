@@ -1,0 +1,33 @@
+---
+alwaysApply: true
+---
+## RULE 3 – MANDATORY METADATA SCHEMA
+
+Every document stored in Qdrant via Haystack MUST include the following metadata:
+
+```json
+{
+  "doc_id": "stable logical id (e.g. path or slug)",
+  "version": "string like v1, v1.1, 2025-11-22T10:30Z",
+  "category": "user_rule | project_rule | project_command | design_doc | debug_summary | test_pattern | other",
+  "source": "manual | generated | imported",
+  "repo": "qdrant_haystack",
+  "path": "logical or physical path if exists",
+  "hash_content": "hash of the normalized content",
+  "hash_file": "optional: hash of original file",
+  "created_at": "ISO timestamp",
+  "updated_at": "ISO timestamp",
+  "status": "active | deprecated | draft",
+  "tags": ["free-form tags here"]
+}
+Storage must fail fast if essential metadata is missing:
+
+doc_id
+
+version
+
+category
+
+hash_content
+
+No document may be written without these fields.

@@ -1,0 +1,19 @@
+---
+alwaysApply: true
+---
+## RULE 2 – DOCUMENT SHAPE & CHUNKING
+
+Every document sent to Qdrant MUST:
+
+1. Be a **clear, self-contained unit of meaning**:
+   - e.g., one rule file, one section of a spec, one debugging summary, one test pattern.
+
+2. Be chunked with:
+   - Preferred size: **512–1024 tokens**  
+   - Hard limit: **< 2048 tokens per chunk**
+
+3. NEVER be chunked into tiny fragments (e.g., 1–2 sentences) unless:
+   - explicitly required for a special use case, and  
+   - documented in the metadata as `granularity: "micro"`.
+
+If a document is shorter than the chunk size, it is stored as a single chunk.
