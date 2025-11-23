@@ -129,7 +129,12 @@ def update_chunked_document(
             # Deprecate old chunk version
             if old_chunk and old_chunk.id:
                 try:
-                    deprecate_version(document_store, old_chunk.id)
+                    # Extract content_hash from old_chunk.meta to avoid ID format validation
+                    content_hash = None
+                    if old_chunk.meta:
+                        content_hash = old_chunk.meta.get('hash_content') or old_chunk.meta.get('content_hash')
+                    
+                    deprecate_version(document_store, old_chunk.id, content_hash=content_hash)
                 except Exception as e:
                     # Log error but continue
                     pass
@@ -227,7 +232,12 @@ def update_chunked_document(
         for deleted_chunk in deleted_chunks:
             if deleted_chunk.id:
                 try:
-                    deprecate_version(document_store, deleted_chunk.id)
+                    # Extract content_hash from deleted_chunk.meta to avoid ID format validation
+                    content_hash = None
+                    if deleted_chunk.meta:
+                        content_hash = deleted_chunk.meta.get('hash_content') or deleted_chunk.meta.get('content_hash')
+                    
+                    deprecate_version(document_store, deleted_chunk.id, content_hash=content_hash)
                     deleted_count += 1
                 except Exception as e:
                     # Log error but continue

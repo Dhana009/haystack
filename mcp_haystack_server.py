@@ -937,8 +937,17 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     # Deprecate old version before storing new one
                     if matching_doc and matching_doc.id:
                         try:
-                            deprecate_result = deprecate_version(document_store, matching_doc.id)
-                            if deprecate_result.get('success'):
+                            # Extract content_hash from matching_doc.meta to avoid ID format validation
+                            content_hash = None
+                            if matching_doc.meta:
+                                content_hash = matching_doc.meta.get('hash_content') or matching_doc.meta.get('content_hash')
+                            
+                            deprecate_result = deprecate_version(
+                                document_store, 
+                                matching_doc.id,
+                                content_hash=content_hash
+                            )
+                            if deprecate_result.get('status') == 'success' or deprecate_result.get('success'):
                                 action_note = f"Content update detected. Old version (ID: {matching_doc.id}) deprecated. New version stored as active."
                             else:
                                 action_note = f"Content update detected. New version stored. Warning: Failed to deprecate old version: {deprecate_result.get('error', 'Unknown error')}"
@@ -1092,8 +1101,17 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     # Deprecate old version before storing new one
                     if matching_doc and matching_doc.id:
                         try:
-                            deprecate_result = deprecate_version(document_store, matching_doc.id)
-                            if deprecate_result.get('success'):
+                            # Extract content_hash from matching_doc.meta to avoid ID format validation
+                            content_hash = None
+                            if matching_doc.meta:
+                                content_hash = matching_doc.meta.get('hash_content') or matching_doc.meta.get('content_hash')
+                            
+                            deprecate_result = deprecate_version(
+                                document_store, 
+                                matching_doc.id,
+                                content_hash=content_hash
+                            )
+                            if deprecate_result.get('status') == 'success' or deprecate_result.get('success'):
                                 action_note = f"Content update detected. Old version (ID: {matching_doc.id}) deprecated. New version stored as active."
                             else:
                                 action_note = f"Content update detected. New version stored. Warning: Failed to deprecate old version: {deprecate_result.get('error', 'Unknown error')}"
@@ -1424,8 +1442,17 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     # Deprecate old version before storing new one
                     if matching_doc and matching_doc.id:
                         try:
-                            deprecate_result = deprecate_version(code_document_store, matching_doc.id)
-                            if deprecate_result.get('success'):
+                            # Extract content_hash from matching_doc.meta to avoid ID format validation
+                            content_hash = None
+                            if matching_doc.meta:
+                                content_hash = matching_doc.meta.get('hash_content') or matching_doc.meta.get('content_hash')
+                            
+                            deprecate_result = deprecate_version(
+                                code_document_store, 
+                                matching_doc.id,
+                                content_hash=content_hash
+                            )
+                            if deprecate_result.get('status') == 'success' or deprecate_result.get('success'):
                                 action_note = f"Content update detected. Old version (ID: {matching_doc.id}) deprecated. New version stored as active."
                             else:
                                 action_note = f"Content update detected. New version stored. Warning: Failed to deprecate old version: {deprecate_result.get('error', 'Unknown error')}"

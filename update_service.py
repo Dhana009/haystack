@@ -295,25 +295,90 @@ def update_document_metadata(
 def deprecate_version(
     document_store: QdrantDocumentStore,
     document_id: str,
-    collection_name: Optional[str] = None
+    collection_name: Optional[str] = None,
+    content_hash: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Mark a document version as deprecated using QdrantClient.set_payload().
+    Mark a document version as deprecated using QdrantClient.set_payload() with filter.
+    
+    Uses filter-based approach instead of point ID to avoid ID format issues
+    (Haystack generates hash string IDs, but Qdrant set_payload/overwrite_payload with points
+    expects integer/UUID).
+    
+    Strategy: Use set_payload with a filter that uniquely identifies the point by its 
+    content_hash (which is unique per version). If content_hash is not provided, attempts
+    to retrieve it using scroll (avoiding ID-based retrieval).
     
     Args:
         document_store: QdrantDocumentStore instance
-        document_id: Document ID (Qdrant point ID)
+        document_id: Document ID (Qdrant point ID - can be hash string, used for logging only)
         collection_name: Optional collection name (defaults to document_store's collection)
+        content_hash: Optional content hash to use directly (avoids ID-based retrieval)
         
     Returns:
         Dictionary with deprecation results
     """
-    return update_document_metadata(
-        document_store=document_store,
-        document_id=document_id,
-        metadata_updates={"status": "deprecated"},
-        collection_name=collection_name
-    )
+    try:
+        client = _get_qdrant_client()
+        
+        # Get collection name
+        if not collection_name:
+            collection_name = document_store.index
+        
+        # If content_hash not provided, try to get it using scroll (avoiding ID-based retrieve)
+        if not content_hash:
+            # Use scroll with a filter to find the point
+            # We can't filter by point ID directly, so we'll use scroll with limit=1
+            # and check if any point matches (this is a fallback, not ideal)
+            # Actually, better approach: use document_store.filter_documents if we have doc_id in metadata
+            # But we don't have that info here. For now, return error asking for content_hash
+            return {
+                "status": "error",
+                "error": "Cannot deprecate: content_hash is required to avoid ID format validation. Please provide content_hash from matching_doc.meta.get('hash_content')",
+                "success": False
+            }
+        
+        # Use set_payload with Filter directly in points parameter to avoid ID format validation
+        # According to Qdrant Python client API, points parameter can accept:
+        # - list of IDs, OR
+        # - Filter object directly, OR  
+        # - FilterSelector, OR
+        # - PointIdsList
+        # Filter by content_hash which uniquely identifies this specific version
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
+        
+        qdrant_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="meta.hash_content",  # Full nested path
+                    match=MatchValue(value=content_hash)
+                )
+            ]
+        )
+        
+        # Pass Filter directly to points parameter (not points_selector)
+        # This updates the payload for all points matching the filter
+        # Since content_hash is unique per version, this will only match one point
+        client.set_payload(
+            collection_name=collection_name,
+            payload={"meta": {"status": "deprecated", "updated_at": datetime.utcnow().isoformat() + 'Z'}},
+            points=qdrant_filter  # Filter can be passed directly to points parameter
+        )
+        
+        return {
+            "status": "success",
+            "message": "Document version deprecated successfully",
+            "document_id": document_id,
+            "success": True
+        }
+    
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "success": False
+        }
 
 
 def get_version_history(
