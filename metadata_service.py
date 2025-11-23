@@ -161,6 +161,124 @@ def build_metadata_schema(
     return metadata
 
 
+def build_chunk_metadata(
+    content: str,
+    doc_id: str,
+    chunk_id: str,
+    chunk_index: int,
+    parent_doc_id: str,
+    total_chunks: int,
+    category: str,
+    hash_content: str,
+    version: Optional[str] = None,
+    file_path: Optional[str] = None,
+    source: str = 'manual',
+    repo: str = 'qdrant_haystack',
+    tags: Optional[List[str]] = None,
+    status: str = 'active',
+    parent_metadata: Optional[Dict] = None
+) -> Dict:
+    """
+    Build RULE 3 compliant metadata schema for a document chunk.
+    
+    This is similar to build_metadata_schema but adds chunk-specific fields:
+    - chunk_id: Unique identifier for the chunk
+    - chunk_index: Position within parent document
+    - parent_doc_id: Reference to parent document
+    - is_chunk: Flag indicating this is a chunk (always True)
+    - total_chunks: Total number of chunks in parent document
+    
+    The chunk uses chunk_id as its doc_id for storage purposes.
+    
+    Args:
+        content: Chunk content (for hash generation)
+        doc_id: Chunk document ID (should be chunk_id)
+        chunk_id: Unique chunk identifier (format: parent_doc_id_chunk_index)
+        chunk_index: Zero-based index of chunk in parent document
+        parent_doc_id: Parent document ID
+        total_chunks: Total number of chunks in parent document
+        category: Document category (inherited from parent)
+        hash_content: Hash of normalized chunk content
+        version: Version string (inherited from parent, default: auto-generated)
+        file_path: File path if document comes from a file (inherited from parent)
+        source: Source type (inherited from parent, default: 'manual')
+        repo: Repository identifier (default: 'qdrant_haystack')
+        tags: List of tags (inherited from parent, default: empty list)
+        status: Document status (default: 'active')
+        parent_metadata: Optional parent document metadata to copy
+        
+    Returns:
+        Dictionary with RULE 3 compliant chunk metadata
+        
+    Raises:
+        ValueError: If required fields are missing or invalid values provided
+    """
+    # Validate required fields
+    if not chunk_id:
+        raise ValueError("chunk_id is required and cannot be empty")
+    if not parent_doc_id:
+        raise ValueError("parent_doc_id is required and cannot be empty")
+    if chunk_index < 0:
+        raise ValueError("chunk_index must be >= 0")
+    if total_chunks <= 0:
+        raise ValueError("total_chunks must be > 0")
+    
+    # Use chunk_id as doc_id for the chunk document
+    chunk_doc_id = chunk_id
+    
+    # Generate version if not provided
+    if not version:
+        version = datetime.utcnow().isoformat() + 'Z'
+    
+    # Generate timestamps
+    now = datetime.utcnow().isoformat() + 'Z'
+    
+    # Build base metadata (similar to regular document)
+    metadata = {
+        'doc_id': chunk_doc_id,  # Chunk uses chunk_id as doc_id
+        'chunk_id': chunk_id,
+        'chunk_index': chunk_index,
+        'parent_doc_id': parent_doc_id,
+        'is_chunk': True,
+        'total_chunks': total_chunks,
+        'version': version,
+        'category': category,
+        'hash_content': hash_content,
+        'source': source,
+        'repo': repo,
+        'status': status,
+        'created_at': now,
+        'updated_at': now,
+        'tags': tags or []
+    }
+    
+    # Add optional fields
+    if file_path:
+        metadata['file_path'] = file_path
+        metadata['path'] = file_path
+    
+    # Copy parent metadata fields if provided (excluding conflicting ones)
+    if parent_metadata:
+        excluded_fields = {'doc_id', 'chunk_id', 'chunk_index', 'parent_doc_id', 
+                          'is_chunk', 'total_chunks', 'hash_content', 'content_hash'}
+        for key, value in parent_metadata.items():
+            if key not in excluded_fields and key not in metadata:
+                metadata[key] = value
+    
+    # Add metadata_hash for deduplication (exclude chunk-specific fields from hash)
+    metadata_for_hash = {k: v for k, v in metadata.items() 
+                        if k not in ['created_at', 'updated_at', 'status', 'version',
+                                    'chunk_index', 'total_chunks']}
+    import json
+    metadata_json = json.dumps(metadata_for_hash, sort_keys=True, default=str)
+    metadata['metadata_hash'] = hashlib.sha256(metadata_json.encode('utf-8')).hexdigest()
+    
+    # Add content_hash alias for backward compatibility
+    metadata['content_hash'] = hash_content
+    
+    return metadata
+
+
 def query_by_file_path(
     document_store: QdrantDocumentStore,
     file_path: str,

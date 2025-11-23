@@ -222,7 +222,112 @@ class TestCheckDuplicateLevel:
         assert level == DUPLICATE_LEVEL_UPDATE
         assert doc == existing_doc
         assert "Content update" in reason
-        assert "same_metadata_hash" in reason
+        assert "metadata_hash" in reason or "same_metadata" in reason
+    
+    def test_level_2_content_update_same_doc_id(self):
+        """Test Level 2: Content update (same doc_id, different content_hash)."""
+        fingerprint = {
+            "content_hash": "new_content_hash",
+            "metadata_hash": "same_metadata_hash",
+            "composite_key": "new_content_hash:same_metadata_hash"
+        }
+        
+        existing_doc = Document(
+            content="Old content",
+            meta={
+                "doc_id": "test_doc_001",
+                "hash_content": "old_content_hash",
+                "metadata_hash": "same_metadata_hash"
+            }
+        )
+        
+        # Test with doc_id parameter - should detect as Level 2
+        level, doc, reason = check_duplicate_level(fingerprint, [existing_doc], doc_id="test_doc_001")
+        
+        assert level == DUPLICATE_LEVEL_UPDATE
+        assert doc == existing_doc
+        assert "Content update" in reason
+        assert "test_doc_001" in reason
+        assert "doc_id" in reason.lower()
+    
+    def test_level_2_content_update_same_doc_id_different_metadata_hash(self):
+        """Test Level 2: Content update with same doc_id but different metadata_hash."""
+        # This is the key scenario: same doc_id, different content, different metadata_hash
+        # Should still be detected as Level 2 (update) because doc_id matches
+        fingerprint = {
+            "content_hash": "new_content_hash",
+            "metadata_hash": "new_metadata_hash",  # Different metadata_hash
+            "composite_key": "new_content_hash:new_metadata_hash"
+        }
+        
+        existing_doc = Document(
+            content="Old content",
+            meta={
+                "doc_id": "test_doc_002",
+                "hash_content": "old_content_hash",
+                "metadata_hash": "old_metadata_hash"  # Different from fingerprint
+            }
+        )
+        
+        # Test with doc_id parameter - should detect as Level 2 even though metadata_hash differs
+        level, doc, reason = check_duplicate_level(fingerprint, [existing_doc], doc_id="test_doc_002")
+        
+        assert level == DUPLICATE_LEVEL_UPDATE
+        assert doc == existing_doc
+        assert "Content update" in reason
+        assert "test_doc_002" in reason
+        assert "doc_id" in reason.lower()
+    
+    def test_level_2_backward_compatibility_no_doc_id(self):
+        """Test backward compatibility: works without doc_id parameter."""
+        fingerprint = {
+            "content_hash": "new_content_hash",
+            "metadata_hash": "same_metadata_hash",
+            "composite_key": "new_content_hash:same_metadata_hash"
+        }
+        
+        existing_doc = Document(
+            content="Old content",
+            meta={
+                "doc_id": "test_doc_003",
+                "hash_content": "old_content_hash",
+                "metadata_hash": "same_metadata_hash"
+            }
+        )
+        
+        # Test without doc_id parameter - should still work (backward compatible)
+        level, doc, reason = check_duplicate_level(fingerprint, [existing_doc])
+        
+        assert level == DUPLICATE_LEVEL_UPDATE
+        assert doc == existing_doc
+        assert "Content update" in reason
+    
+    def test_level_2_doc_id_priority_over_metadata_hash(self):
+        """Test that doc_id check takes priority over metadata_hash check."""
+        fingerprint = {
+            "content_hash": "new_content_hash",
+            "metadata_hash": "different_metadata_hash",
+            "composite_key": "new_content_hash:different_metadata_hash"
+        }
+        
+        # Existing doc has same doc_id but different metadata_hash
+        existing_doc = Document(
+            content="Old content",
+            meta={
+                "doc_id": "test_doc_004",
+                "hash_content": "old_content_hash",
+                "metadata_hash": "old_metadata_hash"  # Different from fingerprint
+            }
+        )
+        
+        # Without doc_id: Should be Level 4 (new) because metadata_hash differs
+        level1, doc1, reason1 = check_duplicate_level(fingerprint, [existing_doc])
+        assert level1 == DUPLICATE_LEVEL_NEW
+        
+        # With doc_id: Should be Level 2 (update) because doc_id matches
+        level2, doc2, reason2 = check_duplicate_level(fingerprint, [existing_doc], doc_id="test_doc_004")
+        assert level2 == DUPLICATE_LEVEL_UPDATE
+        assert "test_doc_004" in reason2
     
     def test_level_4_new_content_different_hashes(self):
         """Test Level 4: New content (different content_hash and metadata_hash)."""

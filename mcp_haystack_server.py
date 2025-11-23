@@ -59,6 +59,13 @@ from backup_restore_service import (
     restore_backup,
     list_backups
 )
+from chunk_update_service import (
+    update_chunked_document,
+    store_chunked_document
+)
+from chunk_service import (
+    get_chunks_by_parent_doc_id
+)
 
 # Qdrant integration
 try:
@@ -236,7 +243,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="add_document",
-            description="Add a document to the Haystack RAG system. The document will be embedded and stored in Qdrant. Use for storing new documents or content for future search.",
+            description="Add a document to the Haystack RAG system. The document will be embedded and stored in Qdrant. Use for storing new documents or content for future search. Supports chunking for incremental updates.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -248,6 +255,25 @@ async def list_tools() -> list[Tool]:
                         "type": "object",
                         "description": "Optional metadata for the document (e.g., file_path, source, etc.)",
                         "additionalProperties": True
+                    },
+                    "enable_chunking": {
+                        "type": "boolean",
+                        "description": "Enable chunking for incremental updates. When enabled, documents are split into chunks and only changed chunks are re-embedded on updates. Default: false",
+                        "default": False
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "description": "Chunk size in tokens when chunking is enabled (default: 512, range: 128-2048)",
+                        "default": 512,
+                        "minimum": 128,
+                        "maximum": 2048
+                    },
+                    "chunk_overlap": {
+                        "type": "integer",
+                        "description": "Overlap between chunks in tokens when chunking is enabled (default: 50, range: 0-256)",
+                        "default": 50,
+                        "minimum": 0,
+                        "maximum": 256
                     }
                 },
                 "required": ["content"]
@@ -274,7 +300,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="add_code",
-            description="Add a code file to the Haystack RAG system with language detection and code-specific metadata. Automatically detects programming language from file extension. Use for storing code files for future search.",
+            description="Add a code file to the Haystack RAG system with language detection and code-specific metadata. Automatically detects programming language from file extension. Use for storing code files for future search. Supports chunking for incremental updates.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -290,6 +316,25 @@ async def list_tools() -> list[Tool]:
                         "type": "object",
                         "description": "Optional additional metadata",
                         "additionalProperties": True
+                    },
+                    "enable_chunking": {
+                        "type": "boolean",
+                        "description": "Enable chunking for incremental updates. When enabled, code files are split into chunks and only changed chunks are re-embedded on updates. Default: false",
+                        "default": False
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "description": "Chunk size in tokens when chunking is enabled (default: 512, range: 128-2048)",
+                        "default": 512,
+                        "minimum": 128,
+                        "maximum": 2048
+                    },
+                    "chunk_overlap": {
+                        "type": "integer",
+                        "description": "Overlap between chunks in tokens when chunking is enabled (default: 50, range: 0-256)",
+                        "default": 50,
+                        "minimum": 0,
+                        "maximum": 256
                     }
                 },
                 "required": ["file_path"]
@@ -724,6 +769,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
         if name == "add_document":
             content = arguments.get("content", "")
             metadata = arguments.get("metadata", {})
+            enable_chunking = arguments.get("enable_chunking", False)
+            chunk_size = arguments.get("chunk_size", 512)
+            chunk_overlap = arguments.get("chunk_overlap", 50)
             
             if not content:
                 return [TextContent(
@@ -740,7 +788,95 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 source = metadata.get('source', 'manual')
                 tags = metadata.get('tags', [])
                 
-                # Step 2: Generate initial content hash for duplicate checking
+                # Step 2: Check if chunking is enabled and handle chunked document update
+                if enable_chunking:
+                    # Check if document already has chunks
+                    existing_chunks = get_chunks_by_parent_doc_id(document_store, doc_id, status='active')
+                    
+                    if existing_chunks:
+                        # Incremental update: Update only changed chunks
+                        update_result = update_chunked_document(
+                            document_store=document_store,
+                            content=content,
+                            doc_id=doc_id,
+                            category=category,
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap,
+                            version=version,
+                            file_path=file_path,
+                            source=source,
+                            tags=tags if isinstance(tags, list) else [],
+                            parent_metadata=metadata,
+                            embedder=doc_embedder
+                        )
+                        
+                        if update_result.get("status") == "error":
+                            return [TextContent(
+                                type="text",
+                                text=json.dumps({
+                                    "error": update_result.get("error"),
+                                    "error_type": update_result.get("error_type")
+                                }, indent=2)
+                            )]
+                        
+                        return [TextContent(
+                            type="text",
+                            text=json.dumps({
+                                "status": "success",
+                                "message": update_result.get("message"),
+                                "doc_id": doc_id,
+                                "version": version,
+                                "category": category,
+                                "chunking_enabled": True,
+                                "total_chunks": update_result.get("total_chunks"),
+                                "unchanged_count": update_result.get("unchanged_count"),
+                                "changed_count": update_result.get("changed_count"),
+                                "new_count": update_result.get("new_count"),
+                                "deleted_count": update_result.get("deleted_count"),
+                                "chunk_ids": update_result.get("chunk_ids")
+                            }, indent=2)
+                        )]
+                    else:
+                        # New chunked document: Store all chunks
+                        store_result = store_chunked_document(
+                            document_store=document_store,
+                            content=content,
+                            doc_id=doc_id,
+                            category=category,
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap,
+                            version=version,
+                            file_path=file_path,
+                            source=source,
+                            tags=tags if isinstance(tags, list) else [],
+                            parent_metadata=metadata,
+                            embedder=doc_embedder
+                        )
+                        
+                        if store_result.get("status") == "error":
+                            return [TextContent(
+                                type="text",
+                                text=json.dumps({
+                                    "error": store_result.get("error"),
+                                    "error_type": store_result.get("error_type")
+                                }, indent=2)
+                            )]
+                        
+                        return [TextContent(
+                            type="text",
+                            text=json.dumps({
+                                "status": "success",
+                                "message": store_result.get("message"),
+                                "doc_id": doc_id,
+                                "version": version,
+                                "category": category,
+                                "chunking_enabled": True,
+                                "total_chunks": store_result.get("total_chunks"),
+                                "chunk_ids": store_result.get("chunk_ids")
+                            }, indent=2)
+                        )]
+                
+                # Step 2 (non-chunked): Generate initial content hash for duplicate checking
                 # We'll generate the full fingerprint after building metadata
                 initial_fingerprint = generate_content_fingerprint(content, metadata)
                 
@@ -781,7 +917,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     existing_docs = query_by_content_hash(document_store, fingerprint['content_hash'], status='active')
                 
                 # Step 6: Determine duplicate level and action
-                level, matching_doc, reason = check_duplicate_level(fingerprint, existing_docs)
+                level, matching_doc, reason = check_duplicate_level(fingerprint, existing_docs, doc_id=doc_id)
                 action, action_data = decide_storage_action(level, fingerprint, matching_doc)
                 
                 # Step 7: Handle action
@@ -798,12 +934,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     )]
                 
                 elif action == ACTION_UPDATE:
-                    # For Phase 1, we'll still store as new but mark old as deprecated
-                    # Full update functionality will be in Phase 2
-                    # For now, we'll store the new version and note that old should be deprecated
+                    # Deprecate old version before storing new one
+                    if matching_doc and matching_doc.id:
+                        try:
+                            deprecate_result = deprecate_version(document_store, matching_doc.id)
+                            if deprecate_result.get('success'):
+                                action_note = f"Content update detected. Old version (ID: {matching_doc.id}) deprecated. New version stored as active."
+                            else:
+                                action_note = f"Content update detected. New version stored. Warning: Failed to deprecate old version: {deprecate_result.get('error', 'Unknown error')}"
+                        except Exception as e:
+                            action_note = f"Content update detected. New version stored. Warning: Error deprecating old version: {str(e)}"
+                    else:
+                        action_note = "Content update detected. New version stored. Warning: Could not deprecate old version (matching document not found)."
                     full_metadata['status'] = 'active'
-                    # Note: Actual deprecation of old version will be handled in Phase 2
-                    action_note = "New version stored. Old version should be deprecated (Phase 2 will handle this automatically)."
                 
                 elif action == ACTION_WARN:
                     full_metadata['status'] = 'active'
@@ -836,7 +979,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                         "action": action,
                         "duplicate_level": level,
                         "reason": reason,
-                        "action_data": action_data
+                        "action_data": action_data,
+                        "chunking_enabled": False
                     }, indent=2)
                 )]
             
@@ -927,7 +1071,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     existing_docs = query_by_content_hash(document_store, fingerprint['content_hash'], status='active')
                 
                 # Step 6: Determine duplicate level and action
-                level, matching_doc, reason = check_duplicate_level(fingerprint, existing_docs)
+                level, matching_doc, reason = check_duplicate_level(fingerprint, existing_docs, doc_id=doc_id)
                 action, action_data = decide_storage_action(level, fingerprint, matching_doc)
                 
                 # Step 6: Handle action
@@ -945,8 +1089,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     )]
                 
                 elif action == ACTION_UPDATE:
+                    # Deprecate old version before storing new one
+                    if matching_doc and matching_doc.id:
+                        try:
+                            deprecate_result = deprecate_version(document_store, matching_doc.id)
+                            if deprecate_result.get('success'):
+                                action_note = f"Content update detected. Old version (ID: {matching_doc.id}) deprecated. New version stored as active."
+                            else:
+                                action_note = f"Content update detected. New version stored. Warning: Failed to deprecate old version: {deprecate_result.get('error', 'Unknown error')}"
+                        except Exception as e:
+                            action_note = f"Content update detected. New version stored. Warning: Error deprecating old version: {str(e)}"
+                    else:
+                        action_note = "Content update detected. New version stored. Warning: Could not deprecate old version (matching document not found)."
                     full_metadata['status'] = 'active'
-                    action_note = "New version stored. Old version should be deprecated (Phase 2 will handle this automatically)."
                 
                 elif action == ACTION_WARN:
                     full_metadata['status'] = 'active'
@@ -999,6 +1154,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
             file_path = arguments.get("file_path", "")
             language = arguments.get("language", "")
             metadata = arguments.get("metadata", {})
+            enable_chunking = arguments.get("enable_chunking", False)
+            chunk_size = arguments.get("chunk_size", 512)
+            chunk_overlap = arguments.get("chunk_overlap", 50)
             
             if not file_path:
                 return [TextContent(
@@ -1077,7 +1235,116 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 source = metadata.get('source', 'manual')
                 tags = metadata.get('tags', [])
                 
-                # Step 2: Generate initial content hash for duplicate checking
+                # Step 2: Check if chunking is enabled and handle chunked code file update
+                if enable_chunking:
+                    # Check if code file already has chunks
+                    existing_chunks = get_chunks_by_parent_doc_id(code_document_store, doc_id, status='active')
+                    
+                    # Build parent metadata with code-specific fields
+                    code_metadata = {
+                        **metadata,
+                        "file_path": str(path),
+                        "file_name": path.name,
+                        "file_extension": path.suffix,
+                        "language": language,
+                        "content_type": "code",
+                        "file_size": path.stat().st_size
+                    }
+                    
+                    if existing_chunks:
+                        # Incremental update: Update only changed chunks
+                        update_result = update_chunked_document(
+                            document_store=code_document_store,
+                            content=content,
+                            doc_id=doc_id,
+                            category=category,
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap,
+                            version=version,
+                            file_path=str(path),
+                            source=source,
+                            tags=tags if isinstance(tags, list) else [],
+                            parent_metadata=code_metadata,
+                            embedder=code_embedder
+                        )
+                        
+                        if update_result.get("status") == "error":
+                            return [TextContent(
+                                type="text",
+                                text=json.dumps({
+                                    "error": update_result.get("error"),
+                                    "error_type": update_result.get("error_type"),
+                                    "file_path": str(path)
+                                }, indent=2)
+                            )]
+                        
+                        return [TextContent(
+                            type="text",
+                            text=json.dumps({
+                                "status": "success",
+                                "message": update_result.get("message"),
+                                "doc_id": doc_id,
+                                "file_path": str(path),
+                                "file_name": path.name,
+                                "language": language,
+                                "version": version,
+                                "category": category,
+                                "collection": "code",
+                                "chunking_enabled": True,
+                                "total_chunks": update_result.get("total_chunks"),
+                                "unchanged_count": update_result.get("unchanged_count"),
+                                "changed_count": update_result.get("changed_count"),
+                                "new_count": update_result.get("new_count"),
+                                "deleted_count": update_result.get("deleted_count"),
+                                "chunk_ids": update_result.get("chunk_ids")
+                            }, indent=2)
+                        )]
+                    else:
+                        # New chunked code file: Store all chunks
+                        store_result = store_chunked_document(
+                            document_store=code_document_store,
+                            content=content,
+                            doc_id=doc_id,
+                            category=category,
+                            chunk_size=chunk_size,
+                            chunk_overlap=chunk_overlap,
+                            version=version,
+                            file_path=str(path),
+                            source=source,
+                            tags=tags if isinstance(tags, list) else [],
+                            parent_metadata=code_metadata,
+                            embedder=code_embedder
+                        )
+                        
+                        if store_result.get("status") == "error":
+                            return [TextContent(
+                                type="text",
+                                text=json.dumps({
+                                    "error": store_result.get("error"),
+                                    "error_type": store_result.get("error_type"),
+                                    "file_path": str(path)
+                                }, indent=2)
+                            )]
+                        
+                        return [TextContent(
+                            type="text",
+                            text=json.dumps({
+                                "status": "success",
+                                "message": store_result.get("message"),
+                                "doc_id": doc_id,
+                                "file_path": str(path),
+                                "file_name": path.name,
+                                "language": language,
+                                "version": version,
+                                "category": category,
+                                "collection": "code",
+                                "chunking_enabled": True,
+                                "total_chunks": store_result.get("total_chunks"),
+                                "chunk_ids": store_result.get("chunk_ids")
+                            }, indent=2)
+                        )]
+                
+                # Step 2 (non-chunked): Generate initial content hash for duplicate checking
                 code_metadata_for_fingerprint = {
                     **metadata,
                     "file_path": str(path),
@@ -1134,7 +1401,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     existing_docs = query_by_content_hash(code_document_store, fingerprint['content_hash'], status='active')
                 
                 # Step 6: Determine duplicate level and action
-                level, matching_doc, reason = check_duplicate_level(fingerprint, existing_docs)
+                level, matching_doc, reason = check_duplicate_level(fingerprint, existing_docs, doc_id=doc_id)
                 action, action_data = decide_storage_action(level, fingerprint, matching_doc)
                 
                 # Step 6: Handle action
@@ -1154,8 +1421,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     )]
                 
                 elif action == ACTION_UPDATE:
+                    # Deprecate old version before storing new one
+                    if matching_doc and matching_doc.id:
+                        try:
+                            deprecate_result = deprecate_version(code_document_store, matching_doc.id)
+                            if deprecate_result.get('success'):
+                                action_note = f"Content update detected. Old version (ID: {matching_doc.id}) deprecated. New version stored as active."
+                            else:
+                                action_note = f"Content update detected. New version stored. Warning: Failed to deprecate old version: {deprecate_result.get('error', 'Unknown error')}"
+                        except Exception as e:
+                            action_note = f"Content update detected. New version stored. Warning: Error deprecating old version: {str(e)}"
+                    else:
+                        action_note = "Content update detected. New version stored. Warning: Could not deprecate old version (matching document not found)."
                     full_metadata['status'] = 'active'
-                    action_note = "New version stored. Old version should be deprecated (Phase 2 will handle this automatically)."
                 
                 elif action == ACTION_WARN:
                     full_metadata['status'] = 'active'
@@ -1192,7 +1470,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                         "action": action,
                         "duplicate_level": level,
                         "reason": reason,
-                        "action_data": action_data
+                        "action_data": action_data,
+                        "chunking_enabled": False
                     }, indent=2)
                 )]
             

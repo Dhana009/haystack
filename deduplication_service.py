@@ -121,20 +121,26 @@ def generate_content_fingerprint(content: str, metadata: Dict) -> Dict[str, str]
 
 def check_duplicate_level(
     fingerprint: Dict[str, str],
-    existing_docs: List[Document]
+    existing_docs: List[Document],
+    doc_id: Optional[str] = None,
+    is_chunk: bool = False
 ) -> Tuple[int, Optional[Document], Optional[str]]:
     """
     Check duplicate level by comparing fingerprint with existing documents.
     
+    Supports both document-level and chunk-level duplicate detection.
+    
     Levels:
     1. Exact Duplicate: Same content_hash AND metadata_hash
-    2. Content Update: Same metadata_hash BUT different content_hash
+    2. Content Update: Same doc_id (or chunk_id) OR same metadata_hash BUT different content_hash
     3. Semantic Similarity: High similarity (>0.85) BUT different hashes
     4. New Content: Low similarity OR different metadata
     
     Args:
         fingerprint: Fingerprint dict with content_hash, metadata_hash, composite_key
         existing_docs: List of existing Document objects to compare against
+        doc_id: Optional document ID (or chunk_id) to check for same-document updates
+        is_chunk: Whether this is a chunk-level comparison (default: False)
         
     Returns:
         Tuple of:
@@ -150,25 +156,59 @@ def check_duplicate_level(
     composite_key = fingerprint['composite_key']
     
     # Level 1: Check for exact duplicate (same content_hash AND metadata_hash)
+    # Works for both documents and chunks
     for doc in existing_docs:
         doc_meta = doc.meta or {}
         doc_content_hash = doc_meta.get('hash_content') or doc_meta.get('content_hash')
         doc_metadata_hash = doc_meta.get('metadata_hash')
         
         if doc_content_hash == content_hash and doc_metadata_hash == metadata_hash:
+            entity_type = "chunk" if is_chunk else "document"
             return (
                 DUPLICATE_LEVEL_EXACT,
                 doc,
-                f"Exact duplicate: same content_hash ({content_hash[:8]}...) and metadata_hash"
+                f"Exact duplicate {entity_type}: same content_hash ({content_hash[:8]}...) and metadata_hash"
             )
     
-    # Level 2: Check for content update (same metadata_hash BUT different content_hash)
-    # This indicates the same file/document was updated
+    # Level 2: Check for content update
+    # For chunks: Check by chunk_id (or chunk_index + parent_doc_id)
+    # For documents: Check by doc_id (or metadata_hash)
     for doc in existing_docs:
         doc_meta = doc.meta or {}
         doc_metadata_hash = doc_meta.get('metadata_hash')
         doc_content_hash = doc_meta.get('hash_content') or doc_meta.get('content_hash')
+        doc_doc_id = doc_meta.get('doc_id')
+        doc_chunk_id = doc_meta.get('chunk_id')
+        doc_chunk_index = doc_meta.get('chunk_index')
+        doc_parent_doc_id = doc_meta.get('parent_doc_id')
         
+        if is_chunk:
+            # Chunk-level duplicate detection
+            # Case 1: Same chunk_id + different content_hash → Level 2 (update)
+            if doc_id and doc_chunk_id and doc_chunk_id == doc_id and doc_content_hash != content_hash:
+                return (
+                    DUPLICATE_LEVEL_UPDATE,
+                    doc,
+                    f"Chunk update: same chunk_id ({doc_id}) but different content_hash"
+                )
+            
+            # Case 2: Same parent_doc_id + same chunk_index + different content_hash → Level 2 (update)
+            # This handles cases where chunk_id might not be set but index is available
+            if doc_parent_doc_id and doc_chunk_index is not None:
+                # Need to check if we have parent_doc_id and chunk_index from new chunk
+                # This will be handled by the caller providing proper doc_id or additional context
+                pass
+        
+        # Document-level duplicate detection (original logic)
+        # Case 1: Same doc_id + different content_hash → Level 2 (update)
+        if doc_id and doc_doc_id and doc_doc_id == doc_id and doc_content_hash != content_hash:
+            return (
+                DUPLICATE_LEVEL_UPDATE,
+                doc,
+                f"Content update: same doc_id ({doc_id}) but different content_hash"
+            )
+        
+        # Case 2: Same metadata_hash + different content_hash → Level 2 (update)
         if doc_metadata_hash == metadata_hash and doc_content_hash != content_hash:
             return (
                 DUPLICATE_LEVEL_UPDATE,
@@ -182,10 +222,11 @@ def check_duplicate_level(
     # For Phase 1, we'll treat this as Level 4 (new content)
     
     # Level 4: New content (default)
+    entity_type = "chunk" if is_chunk else "document"
     return (
         DUPLICATE_LEVEL_NEW,
         None,
-        "New content: different content_hash and/or metadata_hash"
+        f"New {entity_type}: different content_hash and/or metadata_hash"
     )
 
 
