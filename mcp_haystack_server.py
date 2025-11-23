@@ -14,6 +14,7 @@ from haystack.dataclasses.document import Document
 from haystack.components.embedders import SentenceTransformersDocumentEmbedder, SentenceTransformersTextEmbedder
 from haystack.utils import Secret
 from haystack import Pipeline
+from haystack.document_stores.types import DuplicatePolicy
 
 # Import deduplication and metadata services
 from deduplication_service import (
@@ -29,6 +30,7 @@ from metadata_service import (
     build_metadata_schema,
     query_by_doc_id,
     query_by_content_hash,
+    query_by_file_path,
     validate_metadata
 )
 from verification_service import (
@@ -972,7 +974,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 # Step 8: Embed and store
                 result = doc_embedder.run(documents=[doc])
                 documents_with_embeddings = result["documents"]
-                document_store.write_documents(documents_with_embeddings)
+                # Use SKIP policy to prevent accidental overwrites (deduplication handles updates)
+                document_store.write_documents(documents_with_embeddings, policy=DuplicatePolicy.SKIP)
                 
                 doc_id_stored = documents_with_embeddings[0].id
                 
@@ -1136,7 +1139,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 # Step 8: Embed and store
                 result = doc_embedder.run(documents=[doc])
                 documents_with_embeddings = result["documents"]
-                document_store.write_documents(documents_with_embeddings)
+                # Use SKIP policy to prevent accidental overwrites (deduplication handles updates)
+                document_store.write_documents(documents_with_embeddings, policy=DuplicatePolicy.SKIP)
                 
                 doc_id_stored = documents_with_embeddings[0].id
                 
@@ -1477,7 +1481,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 # Step 8: Embed and store using CODE embedder and CODE document store
                 result = code_embedder.run(documents=[doc])
                 documents_with_embeddings = result["documents"]
-                code_document_store.write_documents(documents_with_embeddings)
+                # Use SKIP policy to prevent accidental overwrites (deduplication handles updates)
+                code_document_store.write_documents(documents_with_embeddings, policy=DuplicatePolicy.SKIP)
                 
                 doc_id_stored = documents_with_embeddings[0].id
                 
@@ -1778,28 +1783,27 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     text=json.dumps({"error": "document_id is required"}, indent=2)
                 )]
             
-            # Try to delete from both stores (document might be in either)
+            # Use Haystack's delete_documents method which handles ID conversion internally
+            # Qdrant client direct delete doesn't work with hash string IDs (requires int/UUID)
+            # Haystack's method properly converts hash strings to the correct Qdrant point ID format
             deleted_from_docs = False
             deleted_from_code = False
             
+            # Try deleting from docs collection
             try:
-                # Get all documents from docs store to check if ID exists
-                docs = document_store.filter_documents(filters={"id": document_id})
-                if docs:
-                    document_store.delete_documents([document_id])
-                    deleted_from_docs = True
-            except Exception:
+                document_store.delete_documents([document_id])
+                deleted_from_docs = True
+            except Exception as e:
+                # Document might not exist in docs collection, try code collection
                 pass
             
-            try:
-                # Get all documents from code store to check if ID exists
-                if code_document_store:
-                    code_docs = code_document_store.filter_documents(filters={"id": document_id})
-                    if code_docs:
-                        code_document_store.delete_documents([document_id])
-                        deleted_from_code = True
-            except Exception:
-                pass
+            # Try deleting from code collection
+            if not deleted_from_docs and code_document_store:
+                try:
+                    code_document_store.delete_documents([document_id])
+                    deleted_from_code = True
+                except Exception as e:
+                    pass
             
             if not deleted_from_docs and not deleted_from_code:
                 return [TextContent(
@@ -1941,15 +1945,25 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 )]
             
             try:
-                # Try to get document from docs store first
-                # Use a workaround: get all documents and filter by ID
-                # This is not efficient but works reliably
-                all_docs = document_store.filter_documents(filters=None)
+                # Use Haystack's get_documents_by_id for efficient ID-based retrieval
                 matching_doc = None
-                for doc in all_docs:
-                    if doc.id == document_id:
-                        matching_doc = doc
-                        break
+                
+                # Try docs collection first
+                try:
+                    docs = document_store.get_documents_by_id([document_id])
+                    if docs:
+                        matching_doc = docs[0]
+                except Exception:
+                    pass
+                
+                # Try code collection if not found
+                if not matching_doc and code_document_store:
+                    try:
+                        docs = code_document_store.get_documents_by_id([document_id])
+                        if docs:
+                            matching_doc = docs[0]
+                    except Exception:
+                        pass
                 
                 if matching_doc:
                     result = verify_content_quality(matching_doc)
@@ -1957,21 +1971,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                         type="text",
                         text=json.dumps(result, indent=2)
                     )]
-                
-                # Try code collection
-                if code_document_store:
-                    all_code_docs = code_document_store.filter_documents(filters=None)
-                    for doc in all_code_docs:
-                        if doc.id == document_id:
-                            matching_doc = doc
-                            break
-                    
-                    if matching_doc:
-                        result = verify_content_quality(matching_doc)
-                        return [TextContent(
-                            type="text",
-                            text=json.dumps(result, indent=2)
-                        )]
                 
                 return [TextContent(
                     type="text",
@@ -2198,7 +2197,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     document_id,
                     content,
                     doc_embedder,
-                    metadata_updates
+                    metadata_updates,
+                    code_document_store=code_document_store
                 )
                 return [TextContent(
                     type="text",
@@ -2224,7 +2224,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                 )]
             
             try:
-                result = update_document_metadata(document_store, document_id, metadata_updates)
+                result = update_document_metadata(
+                    document_store, 
+                    document_id, 
+                    metadata_updates,
+                    code_document_store=code_document_store
+                )
                 return [TextContent(
                     type="text",
                     text=json.dumps(result, indent=2)

@@ -11,6 +11,7 @@ from datetime import datetime
 from haystack.dataclasses.document import Document
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
 from haystack.components.embedders import SentenceTransformersDocumentEmbedder
+from haystack.document_stores.types import DuplicatePolicy
 from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, Filter, FieldCondition, MatchValue
 
@@ -37,132 +38,101 @@ def update_document_content(
     new_content: str,
     embedder: SentenceTransformersDocumentEmbedder,
     metadata_updates: Optional[Dict[str, Any]] = None,
-    collection_name: Optional[str] = None
+    collection_name: Optional[str] = None,
+    code_document_store: Optional[QdrantDocumentStore] = None
 ) -> Dict[str, Any]:
     """
-    Atomically update document content and optionally metadata using QdrantClient.upsert().
+    Update document content and optionally metadata using Haystack's native write_documents with OVERWRITE policy.
     
-    Process:
-    1. Retrieve existing document
-    2. Generate new embedding for new content
-    3. Update metadata (including hash_content, updated_at)
-    4. Use upsert() to atomically update vector and payload
+    Process (Haystack's recommended approach):
+    1. Retrieve existing document using filter_documents by ID
+    2. Modify document content and metadata
+    3. Generate new embedding for updated content
+    4. Write back using write_documents with DuplicatePolicy.OVERWRITE
     
     Args:
         document_store: QdrantDocumentStore instance
-        document_id: Document ID (Qdrant point ID)
+        document_id: Document ID (hash string - Haystack handles ID conversion)
         new_content: New document content
         embedder: Document embedder for generating new embedding
         metadata_updates: Optional metadata fields to update
-        collection_name: Optional collection name (defaults to document_store's collection)
+        collection_name: Optional collection name (not used, kept for API consistency)
         
     Returns:
         Dictionary with update results
     """
     try:
-        client = _get_qdrant_client()
+        # Step 1: Find existing document by ID using Haystack's get_documents_by_id
+        # This is the correct and efficient method for ID-based retrieval
+        existing_doc = None
+        target_store = document_store
         
-        # Get collection name
-        if not collection_name:
-            collection_name = document_store.index
+        # Try docs collection first
+        try:
+            docs = document_store.get_documents_by_id([document_id])
+            if docs:
+                existing_doc = docs[0]
+                target_store = document_store
+        except Exception:
+            pass
         
-        # Retrieve existing point
-        points = client.retrieve(
-            collection_name=collection_name,
-            ids=[document_id],
-            with_payload=True,
-            with_vectors=True
-        )
+        # Try code collection if not found
+        if not existing_doc and code_document_store:
+            try:
+                docs = code_document_store.get_documents_by_id([document_id])
+                if docs:
+                    existing_doc = docs[0]
+                    target_store = code_document_store
+            except Exception:
+                pass
         
-        if not points or len(points) == 0:
+        if not existing_doc:
             return {
                 "status": "error",
                 "error": f"Document not found: {document_id}"
             }
         
-        existing_point = points[0]
-        existing_payload = dict(existing_point.payload or {})
+        # Step 2: Prepare updated metadata
+        updated_meta = dict(existing_doc.meta or {})
         
-        # Handle both nested and flattened metadata structures
-        if "meta" in existing_payload and isinstance(existing_payload["meta"], dict):
-            # Nested structure: payload["meta"] = {...}
-            existing_meta = dict(existing_payload["meta"])
-            
-            # Generate new fingerprint for new content
-            fingerprint = generate_content_fingerprint(new_content, existing_meta)
-            
-            # Prepare updated metadata
-            updated_meta = dict(existing_meta)
-            updated_meta["hash_content"] = fingerprint["content_hash"]
-            updated_meta["content_hash"] = fingerprint["content_hash"]  # Alias
-            updated_meta["updated_at"] = datetime.utcnow().isoformat() + 'Z'
-            
-            # Apply metadata updates if provided
-            if metadata_updates:
-                updated_meta.update(metadata_updates)
-            
-            # Regenerate metadata_hash
-            import json
-            import hashlib
-            metadata_for_hash = {k: v for k, v in updated_meta.items() 
-                                if k not in ['created_at', 'updated_at', 'status', 'version']}
-            metadata_json = json.dumps(metadata_for_hash, sort_keys=True, default=str)
-            updated_meta["metadata_hash"] = hashlib.sha256(metadata_json.encode('utf-8')).hexdigest()
-            
-            # Generate new embedding
-            doc_for_embedding = Document(content=new_content, meta=updated_meta)
-            embedding_result = embedder.run(documents=[doc_for_embedding])
-            new_embedding = embedding_result["documents"][0].embedding
-            
-            # Update payload
-            updated_payload = dict(existing_payload)
-            updated_payload["content"] = new_content
-            updated_payload["meta"] = updated_meta
-        else:
-            # Flattened structure: metadata fields at top level
-            # Extract metadata fields for fingerprint generation
-            metadata_fields = {k: v for k, v in existing_payload.items() 
-                             if k not in ['content', 'id']}
-            
-            # Generate new fingerprint for new content
-            fingerprint = generate_content_fingerprint(new_content, metadata_fields)
-            
-            # Update payload directly
-            updated_payload = dict(existing_payload)
-            updated_payload["content"] = new_content
-            updated_payload["hash_content"] = fingerprint["content_hash"]
-            updated_payload["content_hash"] = fingerprint["content_hash"]  # Alias
-            updated_payload["updated_at"] = datetime.utcnow().isoformat() + 'Z'
-            
-            # Apply metadata updates if provided
-            if metadata_updates:
-                updated_payload.update(metadata_updates)
-            
-            # Regenerate metadata_hash
-            import json
-            import hashlib
-            metadata_for_hash = {k: v for k, v in updated_payload.items() 
-                                if k not in ['content', 'id', 'created_at', 'updated_at', 'status', 'version', 'metadata_hash']}
-            metadata_json = json.dumps(metadata_for_hash, sort_keys=True, default=str)
-            updated_payload["metadata_hash"] = hashlib.sha256(metadata_json.encode('utf-8')).hexdigest()
-            
-            # Generate new embedding (need to reconstruct meta dict for Document)
-            meta_for_embedding = {k: v for k, v in updated_payload.items() 
-                                 if k not in ['content', 'id']}
-            doc_for_embedding = Document(content=new_content, meta=meta_for_embedding)
-            embedding_result = embedder.run(documents=[doc_for_embedding])
-            new_embedding = embedding_result["documents"][0].embedding
+        # Generate new fingerprint for new content
+        fingerprint = generate_content_fingerprint(new_content, updated_meta)
         
-        # Atomically update using upsert
-        client.upsert(
-            collection_name=collection_name,
-            points=[
-                PointStruct(
-                    id=document_id,
-                    vector=new_embedding,
-                    payload=updated_payload
-                )
-            ]
+        # Update metadata fields
+        updated_meta["hash_content"] = fingerprint["content_hash"]
+        updated_meta["content_hash"] = fingerprint["content_hash"]  # Alias
+        updated_meta["updated_at"] = datetime.utcnow().isoformat() + 'Z'
+        
+        # Apply metadata updates if provided
+        if metadata_updates:
+            updated_meta.update(metadata_updates)
+        
+        # Regenerate metadata_hash
+        import json
+        import hashlib
+        metadata_for_hash = {k: v for k, v in updated_meta.items() 
+                            if k not in ['created_at', 'updated_at', 'status', 'version']}
+        metadata_json = json.dumps(metadata_for_hash, sort_keys=True, default=str)
+        updated_meta["metadata_hash"] = hashlib.sha256(metadata_json.encode('utf-8')).hexdigest()
+        
+        # Step 3: Create updated document with new content
+        updated_doc = Document(
+            id=existing_doc.id,  # Keep the same ID for overwrite
+            content=new_content,
+            meta=updated_meta,
+            embedding=existing_doc.embedding  # Will be regenerated by embedder
+        )
+        
+        # Step 4: Generate new embedding
+        embedding_result = embedder.run(documents=[updated_doc])
+        updated_doc_with_embedding = embedding_result["documents"][0]
+        
+        # Step 5: Write back using Haystack's write_documents with OVERWRITE policy
+        # This is Haystack's recommended approach for updates
+        # Use the target_store (docs or code) where the document was found
+        target_store.write_documents(
+            [updated_doc_with_embedding],
+            policy=DuplicatePolicy.OVERWRITE
         )
         
         return {
@@ -184,97 +154,85 @@ def update_document_metadata(
     document_store: QdrantDocumentStore,
     document_id: str,
     metadata_updates: Dict[str, Any],
-    collection_name: Optional[str] = None
+    collection_name: Optional[str] = None,
+    code_document_store: Optional[QdrantDocumentStore] = None
 ) -> Dict[str, Any]:
     """
-    Update only metadata fields without changing content using QdrantClient.set_payload().
+    Update only metadata fields without changing content using Haystack's native write_documents with OVERWRITE policy.
+    
+    Process (Haystack's recommended approach):
+    1. Retrieve existing document using filter_documents (check both docs and code collections)
+    2. Update metadata fields (preserve content and embedding)
+    3. Write back using write_documents with DuplicatePolicy.OVERWRITE
     
     Args:
-        document_store: QdrantDocumentStore instance
-        document_id: Document ID (Qdrant point ID)
+        document_store: QdrantDocumentStore instance (docs collection)
+        document_id: Document ID (hash string - Haystack handles ID conversion)
         metadata_updates: Dictionary of metadata fields to update
-        collection_name: Optional collection name (defaults to document_store's collection)
+        collection_name: Optional collection name (not used, kept for API consistency)
+        code_document_store: Optional code document store to check
         
     Returns:
         Dictionary with update results
     """
     try:
-        client = _get_qdrant_client()
+        # Step 1: Find existing document by ID using Haystack's get_documents_by_id
+        # This is the correct and efficient method for ID-based retrieval
+        existing_doc = None
+        target_store = document_store
         
-        # Get collection name
-        if not collection_name:
-            collection_name = document_store.index
+        # Try docs collection first
+        try:
+            docs = document_store.get_documents_by_id([document_id])
+            if docs:
+                existing_doc = docs[0]
+                target_store = document_store
+        except Exception:
+            pass
         
-        # Retrieve existing point to get current payload
-        points = client.retrieve(
-            collection_name=collection_name,
-            ids=[document_id],
-            with_payload=True,
-            with_vectors=False
-        )
+        # Try code collection if not found
+        if not existing_doc and code_document_store:
+            try:
+                docs = code_document_store.get_documents_by_id([document_id])
+                if docs:
+                    existing_doc = docs[0]
+                    target_store = code_document_store
+            except Exception:
+                pass
         
-        if not points or len(points) == 0:
+        if not existing_doc:
             return {
                 "status": "error",
                 "error": f"Document not found: {document_id}"
             }
         
-        existing_point = points[0]
-        existing_payload = dict(existing_point.payload or {})
+        # Step 2: Update metadata (preserve content and embedding)
+        updated_meta = dict(existing_doc.meta or {})
+        updated_meta.update(metadata_updates)
+        updated_meta["updated_at"] = datetime.utcnow().isoformat() + 'Z'
         
-        # Handle both nested and flattened metadata structures
-        # Haystack may store metadata nested under "meta" or flattened at top level
-        if "meta" in existing_payload and isinstance(existing_payload["meta"], dict):
-            # Nested structure: payload["meta"] = {...}
-            existing_meta = dict(existing_payload["meta"])
-            updated_meta = dict(existing_meta)
-            updated_meta.update(metadata_updates)
-            updated_meta["updated_at"] = datetime.utcnow().isoformat() + 'Z'
-            
-            # Regenerate metadata_hash if metadata changed
-            import json
-            import hashlib
-            metadata_for_hash = {k: v for k, v in updated_meta.items() 
-                                if k not in ['created_at', 'updated_at', 'status', 'version']}
-            metadata_json = json.dumps(metadata_for_hash, sort_keys=True, default=str)
-            updated_meta["metadata_hash"] = hashlib.sha256(metadata_json.encode('utf-8')).hexdigest()
-            
-            updated_payload["meta"] = updated_meta
-        else:
-            # Flattened structure: metadata fields at top level
-            # Update metadata fields directly in payload
-            for key, value in metadata_updates.items():
-                existing_payload[key] = value
-            existing_payload["updated_at"] = datetime.utcnow().isoformat() + 'Z'
-            
-            # Regenerate metadata_hash (collect all metadata fields)
-            import json
-            import hashlib
-            # Extract metadata fields (exclude content, id, and dynamic fields)
-            metadata_fields = {k: v for k, v in existing_payload.items() 
-                             if k not in ['content', 'id', 'created_at', 'updated_at', 'status', 'version', 'metadata_hash']}
-            metadata_json = json.dumps(metadata_fields, sort_keys=True, default=str)
-            existing_payload["metadata_hash"] = hashlib.sha256(metadata_json.encode('utf-8')).hexdigest()
-            updated_payload = existing_payload
+        # Regenerate metadata_hash if metadata changed
+        import json
+        import hashlib
+        metadata_for_hash = {k: v for k, v in updated_meta.items() 
+                            if k not in ['created_at', 'updated_at', 'status', 'version']}
+        metadata_json = json.dumps(metadata_for_hash, sort_keys=True, default=str)
+        updated_meta["metadata_hash"] = hashlib.sha256(metadata_json.encode('utf-8')).hexdigest()
         
-        # Get vector from existing point - handle different vector formats
-        vector = None
-        if hasattr(existing_point, 'vector') and existing_point.vector is not None:
-            if isinstance(existing_point.vector, dict):
-                # Named vectors: {"default": [0.1, 0.2, ...]}
-                vector = existing_point.vector.get("default") or list(existing_point.vector.values())[0] if existing_point.vector else None
-            elif isinstance(existing_point.vector, list):
-                vector = existing_point.vector
+        # Step 3: Create updated document with same content and embedding
+        updated_doc = Document(
+            id=existing_doc.id,  # Keep the same ID for overwrite
+            content=existing_doc.content,  # Preserve content
+            meta=updated_meta,
+            embedding=existing_doc.embedding  # Preserve embedding (no re-embedding needed)
+        )
         
-        client.upsert(
-            collection_name=collection_name,
-            points=[
-                PointStruct(
-                    id=document_id,
-                    vector=vector,
-                    payload=updated_payload
-                )
-            ]
+        # Step 4: Write back using Haystack's write_documents with OVERWRITE policy
+        # This is Haystack's recommended approach for metadata-only updates
+        # Use the target_store (docs or code) where the document was found
+        target_store.write_documents(
+            [updated_doc],
+            policy=DuplicatePolicy.OVERWRITE
         )
         
         return {

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from haystack.dataclasses.document import Document
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
+from haystack.document_stores.types import DuplicatePolicy
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny, Range, PointStruct
 
@@ -620,7 +621,15 @@ def import_documents(
                 else:
                     documents_with_embeddings = batch_documents
                 
-                document_store.write_documents(documents_with_embeddings)
+                # Use appropriate DuplicatePolicy based on duplicate_strategy
+                if duplicate_strategy == "skip":
+                    policy = DuplicatePolicy.SKIP
+                elif duplicate_strategy == "update":
+                    policy = DuplicatePolicy.OVERWRITE
+                else:  # "error" - already handled above, but use FAIL for safety
+                    policy = DuplicatePolicy.FAIL
+                
+                document_store.write_documents(documents_with_embeddings, policy=policy)
                 imported_count += len(documents_with_embeddings)
         
         return {

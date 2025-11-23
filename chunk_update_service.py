@@ -9,6 +9,7 @@ from datetime import datetime
 
 from haystack.dataclasses.document import Document
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
+from haystack.document_stores.types import DuplicatePolicy
 
 from chunk_service import (
     chunk_document,
@@ -175,7 +176,8 @@ def update_chunked_document(
             else:
                 embedded_chunk = chunk_doc
             
-            document_store.write_documents([embedded_chunk])
+            # Use OVERWRITE policy for chunk updates (chunks may already exist)
+            document_store.write_documents([embedded_chunk], policy=DuplicatePolicy.OVERWRITE)
             changed_count += 1
             updated_chunk_ids.append(chunk_id)
         
@@ -222,7 +224,8 @@ def update_chunked_document(
             else:
                 embedded_chunk = chunk_doc
             
-            document_store.write_documents([embedded_chunk])
+            # Use OVERWRITE policy for chunk updates (chunks may already exist)
+            document_store.write_documents([embedded_chunk], policy=DuplicatePolicy.OVERWRITE)
             new_count += 1
             updated_chunk_ids.append(chunk_id)
         
@@ -375,8 +378,8 @@ def store_chunked_document(
             stored_chunks.append(embedded_chunk)
             chunk_ids.append(chunk_id)
         
-        # Batch write all chunks
-        document_store.write_documents(stored_chunks)
+        # Batch write all chunks (new chunks, use SKIP to prevent overwrites)
+        document_store.write_documents(stored_chunks, policy=DuplicatePolicy.SKIP)
         
         return {
             "status": "success",
