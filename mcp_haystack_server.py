@@ -2293,7 +2293,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     document_store=document_store,
                     backup_directory=backup_directory,
                     include_embeddings=include_embeddings,
-                    filters=filters
+                    filters=filters,
+                    code_document_store=code_document_store  # Include code collection in backup
                 )
                 return [TextContent(
                     type="text",
@@ -2325,7 +2326,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> Sequence[TextConten
                     document_store=document_store,
                     verify_after_restore=verify_after_restore,
                     duplicate_strategy=duplicate_strategy,
-                    embedder=doc_embedder  # Pass embedder for automatic embedding regeneration
+                    embedder=doc_embedder,  # Pass embedder for automatic embedding regeneration (docs)
+                    code_document_store=code_document_store,  # Include code collection in restore
+                    code_embedder=code_embedder  # Pass code embedder for automatic embedding regeneration (code)
                 )
                 return [TextContent(
                     type="text",
